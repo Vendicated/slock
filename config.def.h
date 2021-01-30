@@ -1,6 +1,6 @@
 /* user and group to drop privileges to */
-static const char *user  = "nobody";
-static const char *group = "nogroup";
+static const char *user  = "ven";
+static const char *group = "ven";
 
 static const char *colorname[NUMCOLS] = {
 	[INIT] =   "black",     /* after initialization */
@@ -10,7 +10,8 @@ static const char *colorname[NUMCOLS] = {
 
 /* treat a cleared input like a wrong password (color) */
 static const int failonclear = 1;
-static const int timetocancel = 4;
+/* time in seconds to cancel lock with mouse movement */
+static const int timetocancel = 5;
 
 /*Enable blur*/
 #define BLUR
@@ -20,4 +21,4 @@ static const int blurRadius=5;
 //#define PIXELATION
 /*Set pixelation radius*/
 static const int pixelSize=0;
-/* time in seconds to cancel lock with mouse movement */
+
