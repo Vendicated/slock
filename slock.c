@@ -6,6 +6,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <grp.h>
 #include <pwd.h>
 #include <stdarg.h>
@@ -13,17 +14,22 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/types.h>
 #include <X11/extensions/Xrandr.h>
 #include <X11/keysym.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <Imlib2.h>
+#include <X11/XF86keysym.h>
+#include <X11/Xresource.h>
 
 #include "arg.h"
 #include "util.h"
 
 char *argv0;
+
+static time_t locktime;
 
 enum {
 	INIT,
@@ -45,6 +51,19 @@ struct xrandr {
 	int evbase;
 	int errbase;
 };
+
+/* Xresources preferences */
+enum resource_type {
+	STRING = 0,
+	INTEGER = 1,
+	FLOAT = 2
+};
+
+typedef struct {
+	char *name;
+	enum resource_type type;
+	void *dst;
+} ResourcePref;
 
 #include "config.h"
 
@@ -145,6 +164,7 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 	oldc = INIT;
 
 	while (running && !XNextEvent(dpy, &ev)) {
+		running = !((time(NULL) - locktime < timetocancel) && (ev.type == MotionNotify));
 		if (ev.type == KeyPress) {
 			explicit_bzero(&buf, sizeof(buf));
 			num = XLookupString(&ev.xkey, buf, sizeof(buf), &ksym, 0);
@@ -161,6 +181,18 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 			    IsPrivateKeypadKey(ksym))
 				continue;
 			switch (ksym) {
+      case XF86XK_AudioPlay:
+      case XF86XK_AudioStop:
+      case XF86XK_AudioPrev:
+      case XF86XK_AudioNext:
+      case XF86XK_AudioRaiseVolume:
+      case XF86XK_AudioLowerVolume:
+      case XF86XK_AudioMute:
+      case XF86XK_AudioMicMute:
+      case XF86XK_MonBrightnessDown:
+      case XF86XK_MonBrightnessUp:
+        XSendEvent(dpy, DefaultRootWindow(dpy), True, KeyPressMask, &ev);
+        break;
 			case XK_Return:
 				passwd[len] = '\0';
 				errno = 0;
@@ -294,6 +326,7 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 				XRRSelectInput(dpy, lock->win, RRScreenChangeNotifyMask);
 
 			XSelectInput(dpy, lock->root, SubstructureNotifyMask);
+			locktime = time(NULL);
 			return lock;
 		}
 
@@ -313,6 +346,57 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 		fprintf(stderr, "slock: unable to grab keyboard for screen %d\n",
 		        screen);
 	return NULL;
+}
+
+int
+resource_load(XrmDatabase db, char *name, enum resource_type rtype, void *dst)
+{
+	char **sdst = dst;
+	int *idst = dst;
+	float *fdst = dst;
+
+	char fullname[256];
+	char fullclass[256];
+	char *type;
+	XrmValue ret;
+
+	snprintf(fullname, sizeof(fullname), "%s.%s", "slock", name);
+	snprintf(fullclass, sizeof(fullclass), "%s.%s", "Slock", name);
+	fullname[sizeof(fullname) - 1] = fullclass[sizeof(fullclass) - 1] = '\0';
+
+	XrmGetResource(db, fullname, fullclass, &type, &ret);
+	if (ret.addr == NULL || strncmp("String", type, 64))
+		return 1;
+
+	switch (rtype) {
+	case STRING:
+		*sdst = ret.addr;
+		break;
+	case INTEGER:
+		*idst = strtoul(ret.addr, NULL, 10);
+		break;
+	case FLOAT:
+		*fdst = strtof(ret.addr, NULL);
+		break;
+	}
+	return 0;
+}
+
+void
+config_init(Display *dpy)
+{
+	char *resm;
+	XrmDatabase db;
+	ResourcePref *p;
+
+	XrmInitialize();
+	resm = XResourceManagerString(dpy);
+	if (!resm)
+		return;
+
+	db = XrmGetStringDatabase(resm);
+	for (p = resources; p < resources + LEN(resources); p++)
+		resource_load(db, p->name, p->type, p->dst);
 }
 
 static void
@@ -373,7 +457,8 @@ main(int argc, char **argv) {
 	if (setuid(duid) < 0)
 		die("slock: setuid: %s\n", strerror(errno));
 
-	/*Create screenshot Image*/
+	
+/*Create screenshot Image*/
 	Screen *scr = ScreenOfDisplay(dpy, DefaultScreen(dpy));
 	image = imlib_create_image(scr->width,scr->height);
 	imlib_context_set_image(image);
@@ -427,6 +512,9 @@ main(int argc, char **argv) {
 	
 	
 #endif
+
+	config_init(dpy);
+
 	/* check for Xrandr support */
 	rr.active = XRRQueryExtension(dpy, &rr.evbase, &rr.errbase);
 
